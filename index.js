@@ -181,7 +181,7 @@ const main = () => {
 
     const count = args[countIndex].slice("--count=".length, args[countIndex].length);
     checkGmailBox(Number(count));
-    if (args.includes("---cron")) {
+    if (args.includes("--cron")) {
         cron.schedule("0 0 */1 * * *", () => {
             checkGmailBox(Number(count))
         })
