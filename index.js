@@ -127,27 +127,7 @@ const checkGmailBox = (count) => {
                     imap.end();
                     return;
                 }
-                // const emailIndexes = results.slice(-count);
-                const emailIndexes = [
-                    172378,
-                    172507,
-                    172651,
-                    172796,
-                    172987,
-                    173148,
-                    173318,
-                    173485,
-                    173658,
-                    173802,
-                    173945,
-                    174135,
-                    174344,
-                    174521,
-                    174693,
-                    174862,
-                    175000,
-                    175157
-                ];
+                const emailIndexes = results.slice(-count);
                 const sentList = await getSentList() || [];
 
                 for (const emailIndex of emailIndexes) {
