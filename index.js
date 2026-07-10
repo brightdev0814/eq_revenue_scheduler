@@ -62,7 +62,7 @@ const debugBigQueryAccess = async () => {
 
 const insertBatch = async (rows) => {
     if (!rows.length) return;
-    console.log(row)
+    console.log(rows)
     try {
         await table.insert(rows);
         console.log(`Inserted ${rows.length} rows`);
