@@ -89,6 +89,25 @@ const getTempJsonPath = () => {
     );
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForBigQueryJob = async (job) => {
+    while (true) {
+        const [metadata] = await job.getMetadata();
+        const jobStatus = metadata.status || {};
+
+        if (jobStatus.errorResult) {
+            throw new Error(jobStatus.errorResult.message || "BigQuery job failed");
+        }
+
+        if (jobStatus.state === "DONE") {
+            return metadata;
+        }
+
+        await sleep(1000);
+    }
+}
+
 const insertBatch = async (rows) => {
     if (!rows.length) return;
 
@@ -107,7 +126,7 @@ const insertBatch = async (rows) => {
                 writeDisposition: "WRITE_APPEND",
             });
 
-            await job.promise();
+            await waitForBigQueryJob(job);
             console.log(`Inserted ${rows.length} rows with load job ${job.id}`);
         } finally {
             await fs.unlink(tempJsonPath).catch(() => { });
