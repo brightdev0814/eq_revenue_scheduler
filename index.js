@@ -1,9 +1,7 @@
 import Imap from "imap"
-import { promises as fs } from "fs"
 import cron from "node-cron"
 import { Low } from "lowdb"
 import { JSONFile } from "lowdb/node"
-import os from "os"
 import path from "path"
 import { fileURLToPath } from "url"
 import { BigQuery } from "@google-cloud/bigquery"
@@ -50,95 +48,27 @@ const addToSentList = async (id) => {
     }
 }
 
-const logBigQueryIdentity = async () => {
-    try {
-        const credentials = await bigquery.authClient.getCredentials();
-        const projectId = await bigquery.authClient.getProjectId();
-
-        console.log("BigQuery auth email:", credentials.client_email || "unknown");
-        console.log("BigQuery auth project:", projectId);
-        hasLoggedBigQueryIdentity = true;
-    } catch (err) {
-        console.error("Unable to read BigQuery auth identity:", err);
-    }
-}
-
-const ensureBigQueryAccess = async () => {
-    if (!hasLoggedBigQueryIdentity) {
-        await logBigQueryIdentity();
-    }
-
-    await table.getMetadata();
-}
-
 const debugBigQueryAccess = async () => {
+    await logBigQueryIdentity();
+
     try {
-        await ensureBigQueryAccess();
+        await table.getMetadata();
         console.log(`BigQuery table access OK: ${PROJECT_ID}.${DATASET_ID}.${TABLE_ID}`);
     } catch (err) {
         console.error("BigQuery table access check failed:", err);
         console.error("BigQuery response body:", err.response?.body || err.message);
-        throw err;
-    }
-}
-
-const getTempJsonPath = () => {
-    return path.join(
-        os.tmpdir(),
-        `everquote-revenue-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
-    );
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const waitForBigQueryJob = async (job) => {
-    while (true) {
-        const [metadata] = await job.getMetadata();
-        const jobStatus = metadata.status || {};
-
-        if (jobStatus.errorResult) {
-            throw new Error(jobStatus.errorResult.message || "BigQuery job failed");
-        }
-
-        if (jobStatus.state === "DONE") {
-            return metadata;
-        }
-
-        await sleep(1000);
     }
 }
 
 const insertBatch = async (rows) => {
     if (!rows.length) return;
-
+    console.log(row)
     try {
-        const tempJsonPath = getTempJsonPath();
-
-        await fs.writeFile(
-            tempJsonPath,
-            rows.map((row) => JSON.stringify(row)).join("\n"),
-            "utf8"
-        );
-
-        try {
-            const [job] = await table.load(tempJsonPath, {
-                sourceFormat: "NEWLINE_DELIMITED_JSON",
-                writeDisposition: "WRITE_APPEND",
-            });
-
-            await waitForBigQueryJob(job);
-            console.log(`Inserted ${rows.length} rows with load job ${job.id}`);
-        } finally {
-            await fs.unlink(tempJsonPath).catch(() => { });
-        }
+        await table.insert(rows);
+        console.log(`Inserted ${rows.length} rows`);
     } catch (err) {
-        if (!hasLoggedBigQueryIdentity) {
-            await logBigQueryIdentity();
-        }
-
-        console.error("BigQuery insert error:", err);
+        // console.error("BigQuery insert error:", err);
         console.error("BigQuery response body:", err.response?.body || err.message);
-        throw err;
     }
 }
 
@@ -306,20 +236,6 @@ const normalizeHeader = (value = "") => {
     return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-const parseNumberValue = (value = "") => {
-    const normalizedValue = String(value)
-        .trim()
-        .replace(/[$,%\s]/g, "")
-        .replace(/,/g, "");
-
-    if (!normalizedValue) {
-        return 0;
-    }
-
-    const parsedValue = Number(normalizedValue);
-    return Number.isFinite(parsedValue) ? parsedValue : 0;
-}
-
 const mapCsvRowsToReportRows = (csvContent) => {
     const [headerRow = [], ...records] = parseCsvRows(csvContent);
     const headerIndex = new Map(
@@ -345,19 +261,9 @@ const mapCsvRowsToReportRows = (csvContent) => {
         DeviceType: getValue(record, "device_type"),
         GeoState: getValue(record, "state"),
         TrafficVertical: getValue(record, "vertical"),
-        FormsU: parseNumberValue(getValue(record, "Forms")),
-        CostA: parseNumberValue(getValue(record, "Partner Revenue")),
-    })).filter((row) =>
-        row.Date ||
-        row.SubID ||
-        row.S2 ||
-        row.Hour ||
-        row.DeviceType ||
-        row.GeoState ||
-        row.TrafficVertical ||
-        row.FormsU ||
-        row.CostA
-    );
+        FormsU: Number(getValue(record, "Forms") || 0),
+        CostA: Number(getValue(record, "Partner Revenue") || 0),
+    }));
 }
 
 const getDataFromEmail = async (id) => {
@@ -405,13 +311,6 @@ const checkGmailBox = (count) => {
             if (err) {
                 return;
             }
-            try {
-                await ensureBigQueryAccess();
-            } catch (accessError) {
-                console.error("Stopping email processing because BigQuery access failed.");
-                imap.end();
-                return;
-            }
             imap.search([
                 "All",
                 ["FROM", "noreply@adverity.com"],
@@ -436,7 +335,7 @@ const checkGmailBox = (count) => {
                     for (let i = 0; i < conversionData.length; i = i + 100) {
                         await insertBatch(conversionData.slice(i, i + 100));
                     }
-                    await addToSentList(emailIndex);
+                    addToSentList(emailIndex);
                 }
                 imap.end();
             });
@@ -447,14 +346,11 @@ const checkGmailBox = (count) => {
     });
     imap.connect();
 }
-const main = async () => {
+const main = () => {
     const args = globalThis.process.argv.slice(2, globalThis.process.argv.length);
     const countIndex = args.findIndex(item => item.includes("--count="));
     if (args.includes("--debug-bq-auth")) {
-        await debugBigQueryAccess();
-        if (countIndex === -1) {
-            return;
-        }
+        debugBigQueryAccess();
     }
     console.log("Count index: >>", countIndex);
     if (countIndex == -1) {
@@ -470,7 +366,4 @@ const main = async () => {
         })
     }
 }
-main().catch((err) => {
-    console.error("Fatal error:", err);
-    process.exitCode = 1;
-});
+main();
